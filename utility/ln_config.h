@@ -55,7 +55,7 @@
  // figure out what board we are building
 
  // Common defines
-#if !defined(STM32F1) && !defined(ESP8266)
+#if !defined(STM32F1) && !defined(ESP8266) && !defined(ESP32)
 #  ifdef PINL	//      For the Mega 2560 (should work with 1280, etc)
 #    define _LNET_USE_MEGA
 #  else		//	For the UNO:
@@ -91,9 +91,12 @@ typedef volatile LnPortRegisterType* LnPortAddrType;
 // which is commonly used in DIY circuit designs, so its normal to be Inverted 
 #define LN_SW_UART_TX_INVERTED
 
-#ifdef ESP8266
+#if defined(ESP8266)
 #  define LN_BIT_PERIOD               ((F_CPU / 16) / 16666)
 #  define LN_TIMER_TX_RELOAD_ADJUST   60
+#elif defined(ESP32)
+#  define LN_BIT_PERIOD               ((F_CPU / CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ) / 16666)
+#  define LN_TIMER_TX_RELOAD_ADJUST   8
 #else
 #  if defined(STM32F1)
 #    define LN_BIT_PERIOD             (rcc_apb1_frequency * 2 / 16666)
@@ -215,11 +218,15 @@ typedef volatile LnPortRegisterType* LnPortAddrType;
 // *****************************************************************************
 // *                                                       Arduino --UNKNOWN-- *
 // *****************************************************************************
-#elif defined(ESP8266)
+#elif defined(ESP8266) || defined(ESP32)
 
-// Read from pin D6 on ESP8266 devices
+// Read from pin D6 on ESP8266 and GPIO22 on ESP32 devices
 #  ifndef LN_RX_PORT
-#    define LN_RX_PORT D6
+#    if defined(ESP8266)
+#      define LN_RX_PORT D6
+#    else
+#      define LN_RX_PORT 22
+#    endif
 #  endif
 #  define LN_RX_DDR  
 #  define LN_RX_BIT

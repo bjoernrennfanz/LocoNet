@@ -41,7 +41,7 @@
 #ifndef _LN_SW_UART_INCLUDED
 #define _LN_SW_UART_INCLUDED
 
-#ifdef ESP8266
+#if defined(ESP8266) || defined(ESP32)
 #  include <Arduino.h>
 #elif !defined(STM32F1)
 #  include <avr/io.h>
@@ -53,7 +53,7 @@
 //added code to distinguish between inverted and non-inverted output 2020-03-28 Hans Tanner
 #ifdef LN_SW_UART_TX_INVERTED 									//normally output is driven via NPN, so it is inverted
 #  ifndef LN_SW_UART_SET_TX_LOW                               // putting a 1 to the pin to switch on NPN transistor
-#    ifdef ESP8266
+#    if defined(ESP8266) || defined(ESP32)
 #      define LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT) lnLastTxBit = HIGH; digitalWrite(LN_TX_PORT, HIGH)    // to pull down LN line to drive low level
 #    else
 #      define LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT) LN_TX_PORT |= (1 << LN_TX_BIT)    // to pull down LN line to drive low level
@@ -61,7 +61,7 @@
 #  endif
 
 #  ifndef LN_SW_UART_SET_TX_HIGH                              // putting a 0 to the pin to switch off NPN transistor
-#    ifdef ESP8266
+#    if defined(ESP8266) || defined(ESP32)
 #      define LN_SW_UART_SET_TX_HIGH(LN_TX_PORT, LN_TX_BIT) lnLastTxBit = LOW; digitalWrite(LN_TX_PORT, LOW)    // master pull up will take care of high LN level
 #    else
 #      define LN_SW_UART_SET_TX_HIGH(LN_TX_PORT, LN_TX_BIT) LN_TX_PORT &= ~(1 << LN_TX_BIT)  // master pull up will take care of high LN level
@@ -69,7 +69,7 @@
 #  endif
 #else //non-inverted output logic
 #  ifndef LN_SW_UART_SET_TX_LOW    
-#    ifdef ESP8266
+#    if defined(ESP8266) || defined(ESP32)
 #      define LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT) lnLastTxBit = LOW; digitalWrite(LN_TX_PORT, LOW)     // to pull down LN line to drive low level
 #    else                           
 #      define LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT) LN_TX_PORT &= ~(1 << LN_TX_BIT)   // to pull down LN line to drive low level
@@ -77,7 +77,7 @@
 #  endif
 
 #  ifndef LN_SW_UART_SET_TX_HIGH 
-#    ifdef ESP8266
+#    if defined(ESP8266) || defined(ESP32)
 #      define LN_SW_UART_SET_TX_HIGH(LN_TX_PORT, LN_TX_BIT) lnLastTxBit = HIGH; digitalWrite(LN_TX_PORT, HIGH)   // master pull up will take care of high LN level
 #    else                             
 #      define LN_SW_UART_SET_TX_HIGH(LN_TX_PORT, LN_TX_BIT) LN_TX_PORT |= (1 << LN_TX_BIT)   // master pull up will take care of high LN level
@@ -100,7 +100,7 @@
 #  define LN_ENABLE_TIMER_INTERRUPT() (timer_enable_irq(TIM2, TIM_DIER_CC1IE))
 // Disable Timer Compare Interrupt
 #  define LN_DISABLE_TIMER_INTERRUPT() (timer_disable_irq(TIM2, TIM_DIER_CC1IE))
-#elif !defined(ESP8266)
+#elif !defined(ESP8266) && !defined(ESP32)
 //Clear StartBit Interrupt flag
 #  define LN_CLEAR_START_BIT_FLAG() (sbi( LN_SB_INT_STATUS_REG, LN_SB_INT_STATUS_BIT ))
 //Enable StartBit Interrupt
@@ -123,7 +123,7 @@
 // Define LN_SW_UART_TX_INVERTED in your board header if your circuit doesn't
 // (for example) use a NPN between TX pin and the Loconet port...
 
-#ifdef ESP8266
+#if defined(ESP8266) || defined(ESP32)
 #  define IS_LN_COLLISION() isLocoNetCollision()
 #else
 #  ifdef LN_SW_UART_TX_INVERTED
@@ -176,9 +176,9 @@
 void initLocoNetHardware(LnBuf* RxBuffer);
 void setTxPortAndPin(LnPortAddrType newTxPort, uint8_t newTxPin);
 LN_STATUS sendLocoNetPacketTry(lnMsg* TxData, unsigned char ucPrioDelay);
-#ifdef ESP8266
-void ICACHE_RAM_ATTR ln_esp8266_pin_isr();
-void ICACHE_RAM_ATTR ln_esp8266_timer1_isr();
+#if defined(ESP8266) || defined(ESP32)
+void ICACHE_RAM_ATTR ln_esp_pin_isr();
+void ICACHE_RAM_ATTR ln_esp_timer1_isr();
 #endif
 
 #endif

@@ -38,13 +38,20 @@
  *
  *****************************************************************************/
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 #  include <Arduino.h>
+#  if defined(ESP8266)
  // The Arduino standard GPIO routines are not enough,
  // must use some from the Espressif SDK as well
 extern "C" {
-#  include "gpio.h"
+#    include "gpio.h"
 }
+#  else
+extern "C" {
+#    include "esp_timer.h"
+#    include "esp_log.h"
+}
+#  endif
 #elif defined(STM32F1)
 #  include <libopencm3/cm3/nvic.h>
 #  include <libopencm3/stm32/exti.h>
@@ -78,37 +85,38 @@ volatile lnMsg* volatile lnTxData;
 volatile uint8_t  lnTxIndex;
 volatile uint8_t  lnTxLength;
 volatile uint8_t  lnTxSuccess;   // this boolean flag as a message from timer interrupt to send function
-#ifdef ESP8266
+#if defined(ESP8266) || defined(ESP32)
 volatile uint8_t  lnLastTxBit;
 #endif
+#if defined(ESP32)
+esp_timer_handle_t lnTimerHandle;
+#endif
 
-#ifndef ESP8266
-volatile uint8_t* txPort;
-#else
-LnPortAddrType txPort;
+#if !defined(ESP8266) && !defined(ESP32)
+LnPortAddrType 	  txPort;
 #endif
 uint8_t           txPin;
 
-#ifndef ESP8266
-#  define LN_TX_PORT *txPort
-#  define LN_TX_BIT  txPin
-#else
+#if defined(ESP8266) || defined(ESP32)
 #  define LN_TX_PORT txPin
 #  define LN_TX_BIT
+#else
+#  define LN_TX_PORT *txPort
+#  define LN_TX_BIT  txPin
 #endif
 
 void setTxPortAndPin(LnPortAddrType newTxPort, uint8_t newTxPin)
 {
-#ifndef ESP8266  
-	txPort = newTxPort;
-#else
+#if defined(ESP8266) || defined(ESP32)
 	// Mute unused parameter warning
 	(void)(newTxPort);
+#else
+	txPort = newTxPort;
 #endif
 	txPin = newTxPin;
 }
 
-#ifdef ESP8266
+#if defined(ESP8266) || defined(ESP32)
 bool ICACHE_RAM_ATTR isLocoNetCollision()
 {
 #ifdef LN_SW_UART_TX_INVERTED
@@ -146,8 +154,8 @@ bool ICACHE_RAM_ATTR isLocoNetCollision()
  *
  **************************************************************************/
 
-#if defined(ESP8266)
-void ICACHE_RAM_ATTR ln_esp8266_pin_isr()
+#if defined(ESP8266) || defined(ESP32)
+void ICACHE_RAM_ATTR ln_esp_pin_isr()
 #else
 ISR(LN_SB_SIGNAL)
 #endif
@@ -160,13 +168,18 @@ ISR(LN_SB_SIGNAL)
 	}
 #endif
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 	// Disable the pin interrupt
 	detachInterrupt(digitalPinToInterrupt(LN_RX_PORT));
 
+#  if defined(ESP8266)
 	// Attach timer interrupt handler and restart timer
-	timer1_attachInterrupt(ln_esp8266_timer1_isr);
+	timer1_attachInterrupt(ln_esp_timer1_isr);
 	timer1_write(LN_TIMER_RX_START_PERIOD);
+#  else
+	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
+	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_RX_RELOAD_PERIOD));
+#  endif
 #else
 	// Disable the Input Comparator Interrupt
 	LN_CLEAR_START_BIT_FLAG();
@@ -210,8 +223,8 @@ ISR(LN_SB_SIGNAL)
  * it samples the bit and shifts it into the buffer.
  *
  **************************************************************************/
-#if defined(ESP8266)
-void ICACHE_RAM_ATTR ln_esp8266_timer1_isr()
+#if defined(ESP8266) || defined(ESP32)
+void ICACHE_RAM_ATTR ln_esp_timer1_isr()
 #else
 ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 #endif
@@ -219,6 +232,9 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 	// Advance the Compare Target by a bit period
 #if defined(ESP8266)
 	timer1_write(LN_TIMER_RX_RELOAD_PERIOD);
+#elif defined(ESP32)
+	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
+	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_RX_RELOAD_PERIOD));
 #else
 	LN_CLEAR_TIMER_FLAG();
 	lnCompareTarget += LN_TIMER_RX_RELOAD_PERIOD;
@@ -243,13 +259,13 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 			return;
 		}
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 		// Enable the pin interrupt
-#ifdef LN_SW_UART_RX_INVERTED  
-		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, RISING);
-#else
-		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, FALLING);
-#endif
+#  ifdef LN_SW_UART_RX_INVERTED  
+		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, RISING);
+#  else
+		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, FALLING);
+#  endif
 #else
 		// Clear the Start Bit Interrupt Status Flag and Enable ready to 
 		// detect the next Start Bit
@@ -306,6 +322,9 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 			LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT);
 #if defined(ESP8266)
 			timer1_write(LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST);
+#elif defined(ESP32)
+			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
+			ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST));
 #else
 			// Get the Current Timer1 Count and Add the offset for the Compare target
 			// added adjustment value for bugfix (Olaf Funke)
@@ -361,12 +380,12 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 			// Even though we are waiting, other nodes may try and transmit early
 			// so Clear the Start Bit Interrupt Status Flag and Enable ready to 
 			// detect the next Start Bit
-#if defined(ESP8266)
-#ifdef LN_SW_UART_RX_INVERTED  
-			attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, RISING);
-#else
-			attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, FALLING);
-#endif
+#if defined(ESP8266) || defined(ESP32)
+#  ifdef LN_SW_UART_RX_INVERTED  
+			attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, RISING);
+#  else
+			attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, FALLING);
+#  endif
 #else
 			LN_CLEAR_START_BIT_FLAG();
 			LN_ENABLE_START_BIT_INTERRUPT();
@@ -377,6 +396,8 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 			lnState = LN_ST_IDLE;
 #if defined(ESP8266)
 			timer1_detachInterrupt();
+#elif defined(ESP32)
+			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
 #else
 			LN_DISABLE_TIMER_INTERRUPT();
 #endif
@@ -390,7 +411,7 @@ void initLocoNetHardware(LnBuf * RxBuffer)
 	lnRxBuffer = RxBuffer;
 
 	// Set the RX line to Input
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 	pinMode(LN_RX_PORT, INPUT);
 #elif defined(STM32F1)
 	pinMode(LN_RX_PIN_NAME, INPUT);
@@ -404,6 +425,13 @@ void initLocoNetHardware(LnBuf * RxBuffer)
 #if defined(ESP8266)
 	timer1_detachInterrupt();
 	timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
+#elif defined(ESP32)
+	esp_timer_create_args_t lnTimerArgs;
+  	lnTimerArgs.callback = reinterpret_cast<esp_timer_cb_t>(&ln_esp_timer1_isr);
+  	lnTimerArgs.dispatch_method = ESP_TIMER_TASK;
+  	lnTimerArgs.name = "LocoNet Sampling Timer";
+	
+	ESP_ERROR_CHECK(esp_timer_create(&lnTimerArgs, &lnTimerHandle));
 #elif defined(STM32F1)
 	// === Setup the timer ===
 
@@ -486,11 +514,11 @@ void initLocoNetHardware(LnBuf * RxBuffer)
 
 	lnState = LN_ST_IDLE;
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 #  ifdef LN_SW_UART_RX_INVERTED  
-	attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, RISING);
+	attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, RISING);
 #  else
-	attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, FALLING);
+	attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, FALLING);
 #  endif
 #else
 	//Clear StartBit Interrupt flag
@@ -538,6 +566,8 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 
 #if defined(ESP8266)
 			timer1_detachInterrupt();
+#elif defined(ESP32)
+			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
 #else
 			LN_DISABLE_TIMER_INTERRUPT();
 #endif
@@ -565,7 +595,7 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 	// must be as short as possible, not interrupted.
 	noInterrupts();
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 	// Before we do anything else - Disable StartBit Interrupt
 	detachInterrupt(digitalPinToInterrupt(LN_RX_PORT));
 #  ifdef LN_SW_UART_RX_INVERTED  
@@ -584,11 +614,11 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 #endif
 		// first we disabled it, than before sending the start bit, we found out
 		// that somebody was faster by examining the start bit interrupt request flag
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 #  ifdef LN_SW_UART_RX_INVERTED  
-		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, RISING);
+		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, RISING);
 #  else
-		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp8266_pin_isr, FALLING);
+		attachInterrupt(digitalPinToInterrupt(LN_RX_PORT), ln_esp_pin_isr, FALLING);
 #  endif
 #else
 		LN_ENABLE_START_BIT_INTERRUPT();
@@ -600,7 +630,7 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 
 	LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT);        // Begin the Start Bit
 
-#if !defined(ESP8266)
+#if !defined(ESP8266) && !defined(ESP32)
   // Get the Current Timer1 Count and Add the offset for the Compare target
   // added adjustment value for bugfix (Olaf Funke)
 #  if defined(STM32F1)
@@ -629,8 +659,11 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 	lnBitCount = 0;
 
 #if defined(ESP8266)
-	timer1_attachInterrupt(ln_esp8266_timer1_isr);
+	timer1_attachInterrupt(ln_esp_timer1_isr);
 	timer1_write(LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST);
+#elif defined(ESP32)
+	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
+	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST));
 #else
 	// Clear the current Compare interrupt status bit and enable the Compare interrupt
 	LN_CLEAR_TIMER_FLAG();
@@ -640,12 +673,15 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 	while (lnState == LN_ST_TX) {
 		// now busy wait until the interrupts do the rest
 	}
+
 	if (lnTxSuccess) {
 		lnRxBuffer->Stats.TxPackets++;
 		return LN_DONE;
 	}
+
 	if (lnState == LN_ST_TX_COLLISION) {
 		return LN_COLLISION;
 	}
+
 	return LN_UNKNOWN_ERROR; // everything else is an error
 }

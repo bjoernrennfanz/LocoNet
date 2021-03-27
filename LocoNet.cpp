@@ -72,7 +72,7 @@
 #include "ln_config.h"
 #include "utils.h"
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 #  include <EEPROM.h>
 #  define E2END 0x1FF // Simulate 512 byte EEPROM
 
@@ -131,8 +131,8 @@ void LocoNetClass::init(uint8_t txPin)
 	setTxPin(txPin);
 	initLocoNetHardware(&LnBuffer);
 
-#ifdef ESP8266
-	// Setup EEProm emulation on EPS8266
+#if defined(ESP8266) || defined(ESP32)
+	// Setup EEProm emulation on EPS controllers
 	EEPROM.begin(E2END);
 #endif
 }
@@ -148,7 +148,7 @@ void LocoNetClass::setTxPin(uint8_t txPin)
 	//#else
 	pinMode(txPin, OUTPUT);
 
-#ifndef ESP8266
+#if !defined(ESP8266) && !defined(ESP32)
 	// Not figure out which Port bit is the Tx Bit from the Arduino pin number
 	LnPortRegisterType bitMask = digitalPinToBitMask(txPin);
 	LnPortRegisterType bitMaskTest = 0x01;
@@ -1674,8 +1674,12 @@ SV_STATUS LocoNetSystemVariableClass::processMessage(lnMsg* LnPacket)
 
 	if (LnPacket->sv.sv_cmd == (SV_RECONFIGURE | 0x40))
 	{
+#if !defined(ESP8266) && !defined(ESP32)
 		wdt_enable(WDTO_15MS);  // prepare for reset
 		while (1) {}            // stop and wait for watchdog to knock us out
+#else
+		ESP.restart();
+#endif
 	}
 
 	return SV_OK;
