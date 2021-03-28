@@ -46,11 +46,6 @@
 extern "C" {
 #    include "gpio.h"
 }
-#  else
-extern "C" {
-#    include "esp_timer.h"
-#    include "esp_log.h"
-}
 #  endif
 #elif defined(STM32F1)
 #  include <libopencm3/cm3/nvic.h>
@@ -87,9 +82,13 @@ volatile uint8_t  lnTxLength;
 volatile uint8_t  lnTxSuccess;   // this boolean flag as a message from timer interrupt to send function
 #if defined(ESP8266) || defined(ESP32)
 volatile uint8_t  lnLastTxBit;
-#endif
-#if defined(ESP32)
-esp_timer_handle_t lnTimerHandle;
+#  if defined(ESP32)
+hw_timer_t* lnTimerSampling = NULL;
+portMUX_TYPE lnTimerSamplingMux = portMUX_INITIALIZER_UNLOCKED;
+#    define timer1_write(_value) timerWrite(lnTimerSampling, _value)
+#    define timer1_attachInterrupt(_isr) timerAttachInterrupt(lnTimerSampling, _isr, true)
+#    define timer1_detachInterrupt() if (lnTimerSampling) { timerDetachInterrupt(lnTimerSampling); }
+#  endif
 #endif
 
 #if !defined(ESP8266) && !defined(ESP32)
@@ -169,17 +168,16 @@ ISR(LN_SB_SIGNAL)
 #endif
 
 #if defined(ESP8266) || defined(ESP32)
+#  if defined(ESP32)
+	portENTER_CRITICAL_ISR(&lnTimerSamplingMux);
+#  endif
+
 	// Disable the pin interrupt
 	detachInterrupt(digitalPinToInterrupt(LN_RX_PORT));
 
-#  if defined(ESP8266)
 	// Attach timer interrupt handler and restart timer
 	timer1_attachInterrupt(ln_esp_timer1_isr);
 	timer1_write(LN_TIMER_RX_START_PERIOD);
-#  else
-	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
-	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_RX_RELOAD_PERIOD));
-#  endif
 #else
 	// Disable the Input Comparator Interrupt
 	LN_CLEAR_START_BIT_FLAG();
@@ -209,6 +207,8 @@ ISR(LN_SB_SIGNAL)
 	// Must clear this bit in the interrupt register,
 	// it gets set even when interrupts are disabled
 	GPIO_REG_WRITE(GPIO_STATUS_W1TC_ADDRESS, 1 << LN_RX_PORT);
+#elif defined(ESP32)
+	portEXIT_CRITICAL_ISR(&lnTimerSamplingMux);
 #endif
 }
 
@@ -230,11 +230,12 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 #endif
 {
 	// Advance the Compare Target by a bit period
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
+#  if defined(ESP32)
+	portENTER_CRITICAL_ISR(&lnTimerSamplingMux);
+#  endif
+
 	timer1_write(LN_TIMER_RX_RELOAD_PERIOD);
-#elif defined(ESP32)
-	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
-	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_RX_RELOAD_PERIOD));
 #else
 	LN_CLEAR_TIMER_FLAG();
 	lnCompareTarget += LN_TIMER_RX_RELOAD_PERIOD;
@@ -320,11 +321,8 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 
 			// Begin the Start Bit
 			LN_SW_UART_SET_TX_LOW(LN_TX_PORT, LN_TX_BIT);
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 			timer1_write(LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST);
-#elif defined(ESP32)
-			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
-			ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST));
 #else
 			// Get the Current Timer1 Count and Add the offset for the Compare target
 			// added adjustment value for bugfix (Olaf Funke)
@@ -394,15 +392,17 @@ ISR(LN_TMR_SIGNAL)     /* signal handler for timer0 overflow */
 		else if (lnBitCount >= LN_BACKOFF_MAX) {
 			// declare network to free after maximum backoff delay
 			lnState = LN_ST_IDLE;
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 			timer1_detachInterrupt();
-#elif defined(ESP32)
-			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
 #else
 			LN_DISABLE_TIMER_INTERRUPT();
 #endif
 		}
 	}
+
+#if defined(ESP32)
+	portEXIT_CRITICAL_ISR(&lnTimerSamplingMux);
+#endif
 }
 
 
@@ -422,16 +422,11 @@ void initLocoNetHardware(LnBuf * RxBuffer)
 	// Set the TX line to Inactive
 	LN_SW_UART_SET_TX_HIGH(LN_TX_PORT, LN_TX_BIT);
 
-#if defined(ESP8266)
 	timer1_detachInterrupt();
+#if defined(ESP8266)
 	timer1_enable(TIM_DIV16, TIM_EDGE, TIM_SINGLE);
 #elif defined(ESP32)
-	esp_timer_create_args_t lnTimerArgs;
-  	lnTimerArgs.callback = reinterpret_cast<esp_timer_cb_t>(&ln_esp_timer1_isr);
-  	lnTimerArgs.dispatch_method = ESP_TIMER_TASK;
-  	lnTimerArgs.name = "LocoNet Sampling Timer";
-	
-	ESP_ERROR_CHECK(esp_timer_create(&lnTimerArgs, &lnTimerHandle));
+	lnTimerSampling = timerBegin(1, 48, false);
 #elif defined(STM32F1)
 	// === Setup the timer ===
 
@@ -564,10 +559,8 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 		if (lnBitCount >= ucPrioDelay) {	// Likely we don't want to wait as long as
 			lnState = LN_ST_IDLE;			// the timer ISR waits its maximum delay.
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 			timer1_detachInterrupt();
-#elif defined(ESP32)
-			ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
 #else
 			LN_DISABLE_TIMER_INTERRUPT();
 #endif
@@ -658,12 +651,9 @@ LN_STATUS sendLocoNetPacketTry(lnMsg * TxData, unsigned char ucPrioDelay)
 	// Reset the bit counter
 	lnBitCount = 0;
 
-#if defined(ESP8266)
+#if defined(ESP8266) || defined(ESP32)
 	timer1_attachInterrupt(ln_esp_timer1_isr);
 	timer1_write(LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST);
-#elif defined(ESP32)
-	ESP_ERROR_CHECK(esp_timer_stop(lnTimerHandle));
-	ESP_ERROR_CHECK(esp_timer_start_once(lnTimerHandle, LN_TIMER_TX_RELOAD_PERIOD - LN_TIMER_TX_RELOAD_ADJUST));
 #else
 	// Clear the current Compare interrupt status bit and enable the Compare interrupt
 	LN_CLEAR_TIMER_FLAG();

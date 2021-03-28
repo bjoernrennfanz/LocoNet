@@ -95,8 +95,8 @@ typedef volatile LnPortRegisterType* LnPortAddrType;
 #  define LN_BIT_PERIOD               ((F_CPU / 16) / 16666)
 #  define LN_TIMER_TX_RELOAD_ADJUST   60
 #elif defined(ESP32)
-#  define LN_BIT_PERIOD               ((F_CPU / CONFIG_ESP32_DEFAULT_CPU_FREQ_MHZ) / 16666)
-#  define LN_TIMER_TX_RELOAD_ADJUST   8
+#  define LN_BIT_PERIOD               ((F_CPU / 48) / 16666)
+#  define LN_TIMER_TX_RELOAD_ADJUST   60
 #else
 #  if defined(STM32F1)
 #    define LN_BIT_PERIOD             (rcc_apb1_frequency * 2 / 16666)
